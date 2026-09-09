@@ -79,6 +79,7 @@
     color: var(--mute);
   }
   #transcript mark { background: var(--hot-soft); color: var(--hot); border-radius: 3px; padding: 0 3px; }
+  #transcript mark.silent { background: var(--line); color: var(--mute); }
 
   aside {
     border-left: 1px solid var(--line);
@@ -95,6 +96,7 @@
     border: 1px solid var(--line); border-radius: 6px;
     background: white; color: var(--ink);
   }
+  #silent { min-height: 70px; }
   textarea:focus, button:focus-visible { outline: 3px solid var(--hot); outline-offset: 2px; }
   button {
     font: inherit; font-weight: 600;
@@ -157,6 +159,12 @@
     </div>
 
     <div>
+      <label for="silent">Silent words</label>
+      <textarea id="silent" spellcheck="false" placeholder="one word or phrase per line"></textarea>
+      <div class="hint">Counted and logged, but they play no sound. Same masking and whole-word rules. A word on both lists is treated as silent.</div>
+    </div>
+
+    <div>
       <label>Log</label>
       <ul id="log"></ul>
       <div class="row" style="margin-top:10px">
@@ -168,7 +176,7 @@
 
 <footer>
   <span id="err"></span>
-  <span id="note">Put a <code>goat.wav</code> next to this file for the real scream; otherwise you get a synthesized bleat. Audio is processed by your browser's speech engine. Nothing is stored except your word list and today's count.</span>
+  <span id="note">Put a <code>goat.wav</code> next to this file for the real scream; otherwise you get a synthesized bleat. Audio is processed by your browser's speech engine. Nothing is stored except your word lists and today's count.</span>
 </footer>
 
 <script>
@@ -184,9 +192,11 @@
   const today = new Date().toDateString();
   let count = store.get('day', '') === today ? store.get('count', 0) : 0;
 
-  const DEFAULT_WORDS = ['fuck', 'ass', 'bitch', 'shit', 'nigga', 'nigger'];
+  const DEFAULT_WORDS  = ['fuck', 'ass', 'bitch', 'shit'];   // these bleat
+  const DEFAULT_SILENT = ['nigga', 'nigger'];                // these only count
   const OLD_DEFAULT_WORDS = ['darn', 'heck', 'crap'];
-  const asKey = list => list.map(w => w.trim().toLowerCase()).filter(Boolean).sort().join('\n');
+  const clean = list => list.map(w => w.trim().toLowerCase()).filter(Boolean);
+  const asKey = list => clean(list).slice().sort().join('\n');
 
   let words = store.get('words', DEFAULT_WORDS.slice());
   // A browser still carrying the untouched original starter list gets the new
@@ -195,6 +205,18 @@
     words = DEFAULT_WORDS.slice();
     store.set('words', words);
   }
+
+  // The silent list arrived after the loud one. A browser that has never seen
+  // it gets the default, and anything now handled silently is lifted out of
+  // the loud list, so no word can sit on both and bleat after all.
+  let silent = store.get('silent', null);
+  if (silent === null) {
+    silent = DEFAULT_SILENT.slice();
+    store.set('silent', silent);
+    const moved = new Set(clean(silent));
+    const kept = words.filter(w => !moved.has(w.trim().toLowerCase()));
+    if (kept.length !== words.length) { words = kept; store.set('words', words); }
+  }
   let listening = false;
   let wantListening = false;
   let rec = null;
@@ -202,6 +224,7 @@
 
   $('count').textContent = count;
   $('words').value = words.join('\n');
+  $('silent').value = silent.join('\n');
 
   // ---------- the goat ----------
   // Uses goat.wav from the same folder if it exists; falls back to a synth bleat.
@@ -252,40 +275,47 @@
   //    the list wins; the count is right either way, the label may not be.
   const MASKED = /(^|[^a-z*])([a-z])(\*{2,})(?![a-z*])/gi;
 
-  const listWords = () => words.map(w => w.trim().toLowerCase()).filter(Boolean);
-
-  function pattern() {
-    const esc = listWords()
+  function pattern(list) {
+    const esc = clean(list)
       .map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'));
     return esc.length ? new RegExp('\\b(' + esc.join('|') + ')\\b', 'gi') : null;
   }
-  let re = pattern();
+  let re = pattern(words), reSilent = pattern(silent);
 
   // "f***" -> "fuck". Single tokens only: a masked word is never a phrase.
-  function unmask(token) {
+  function unmask(token, list) {
     const first = token[0].toLowerCase();
-    return listWords().find(w =>
+    return clean(list).find(w =>
       !w.includes(' ') && w.length === token.length && w[0] === first) || null;
+  }
+
+  // Both kinds of match against one list, appended to `found`.
+  function gather(text, rx, list, quiet, found) {
+    let m;
+    if (rx) {
+      rx.lastIndex = 0;
+      while ((m = rx.exec(text)) !== null) {
+        found.push({ at: m.index, len: m[0].length, word: m[1].toLowerCase(), quiet });
+        if (m[0].length === 0) rx.lastIndex++;
+      }
+    }
+    MASKED.lastIndex = 0;
+    while ((m = MASKED.exec(text)) !== null) {
+      const token = m[2] + m[3];
+      const word = unmask(token, list);
+      if (word) found.push({ at: m.index + m[1].length, len: token.length, word, quiet });
+    }
   }
 
   // Every hit in one pass, in reading order, so the counter and the on-screen
   // highlight are driven by exactly the same result.
   function scan(text) {
     const found = [];
-    let m;
-    if (re) {
-      re.lastIndex = 0;
-      while ((m = re.exec(text)) !== null) {
-        found.push({ at: m.index, len: m[0].length, word: m[1].toLowerCase() });
-        if (m[0].length === 0) re.lastIndex++;
-      }
-    }
-    MASKED.lastIndex = 0;
-    while ((m = MASKED.exec(text)) !== null) {
-      const token = m[2] + m[3];
-      const word = unmask(token);
-      if (word) found.push({ at: m.index + m[1].length, len: token.length, word });
-    }
+    // Silent list first. The sort below is stable, so when the same span is
+    // on both lists the silent reading is the one that survives, and a word
+    // that must never make a noise cannot be rescued into making one.
+    gather(text, reSilent, silent, true, found);
+    gather(text, re, words, false, found);
     found.sort((a, b) => a.at - b.at);
     const out = [];
     let end = 0;
@@ -303,7 +333,7 @@
   const COOLDOWN_MS = 2000;
   let lastHitAt = 0;
 
-  function hit(word) {
+  function hit(word, quiet) {
     const now = Date.now();
     if (now - lastHitAt < COOLDOWN_MS) return;
     lastHitAt = now;
@@ -313,7 +343,7 @@
     store.set('day', today);
     $('count').classList.add('flash');
     setTimeout(() => $('count').classList.remove('flash'), 400);
-    ding();
+    if (!quiet) ding();   // counted and logged either way
     const li = document.createElement('li');
     const time = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     li.innerHTML = `<span>${word.toLowerCase()}</span><span>${time}</span>`;
@@ -324,7 +354,8 @@
     const esc = s => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
     let html = '', at = 0;
     for (const m of scan(text)) {
-      html += esc(text.slice(at, m.at)) + '<mark>' + esc(text.slice(m.at, m.at + m.len)) + '</mark>';
+      const tag = m.quiet ? '<mark class="silent">' : '<mark>';
+      html += esc(text.slice(at, m.at)) + tag + esc(text.slice(m.at, m.at + m.len)) + '</mark>';
       at = m.at + m.len;
     }
     $('transcript').innerHTML = html + esc(text.slice(at));
@@ -356,7 +387,7 @@
           const key = i + ':' + text;
           if (key === lastFinalHash) continue;
           lastFinalHash = key;
-          scan(text).forEach(m => hit(m.word));
+          scan(text).forEach(m => hit(m.word, m.quiet));
           showTranscript(text);
         } else interim += text;
       }
@@ -382,10 +413,16 @@
   $('toggle').onclick = () => { $('err').textContent = ''; wantListening ? stop() : start(); };
   $('test').onclick = ding;
   $('reset').onclick = () => { count = 0; $('count').textContent = 0; store.set('count', 0); $('log').innerHTML = ''; };
+  const readList = id => $(id).value.split('\n').map(w => w.trim()).filter(Boolean);
   $('words').oninput = () => {
-    words = $('words').value.split('\n').map(w => w.trim()).filter(Boolean);
+    words = readList('words');
     store.set('words', words);
-    re = pattern();
+    re = pattern(words);
+  };
+  $('silent').oninput = () => {
+    silent = readList('silent');
+    store.set('silent', silent);
+    reSilent = pattern(silent);
   };
 
   // Chrome pauses audio when the tab is hidden; keep the page visible.
