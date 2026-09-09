@@ -186,15 +186,24 @@
 
   const DEFAULT_WORDS = ['fuck', 'ass', 'bitch', 'shit', 'nigga', 'nigger'];
   const OLD_DEFAULT_WORDS = ['darn', 'heck', 'crap'];
-  const asKey = list => list.map(w => w.trim().toLowerCase()).filter(Boolean).sort().join('\n');
+  // Tolerate whatever localStorage hands back -- a list, a string, null,
+  // junk -- so everything downstream can assume a real array of words.
+  // tidy keeps what the teacher typed; clean also folds case, for comparing.
+  const tidy  = list => (Array.isArray(list) ? list : [])
+    .map(w => String(w).trim()).filter(Boolean);
+  const clean = list => tidy(list).map(w => w.toLowerCase());
+  const asKey = list => clean(list).slice().sort().join('\n');
 
-  let words = store.get('words', DEFAULT_WORDS.slice());
+  // An empty saved list used to load an empty box that matched nothing, with
+  // no way back short of clearing site data: the stored value was [], which
+  // is not null, so the default never applied. Anything without at least one
+  // real word in it now falls back to the defaults.
+  let words = tidy(store.get('words', null));
+  if (!words.length) words = DEFAULT_WORDS.slice();
+
   // A browser still carrying the untouched original starter list gets the new
   // one. A list that was actually edited is left exactly as it is.
-  if (asKey(words) === asKey(OLD_DEFAULT_WORDS)) {
-    words = DEFAULT_WORDS.slice();
-    store.set('words', words);
-  }
+  if (asKey(words) === asKey(OLD_DEFAULT_WORDS)) words = DEFAULT_WORDS.slice();
 
   // There was briefly a second, silent list. It is gone, and every word plays
   // the goat again -- but a browser that ran that version still has those
@@ -203,13 +212,16 @@
   // the key so this runs once.
   const parked = store.get('silent', null);
   if (parked !== null) {
-    const have = new Set(words.map(w => w.trim().toLowerCase()));
-    for (const w of parked.map(w => w.trim()).filter(Boolean)) {
+    const have = new Set(clean(words));
+    for (const w of tidy(parked)) {
       if (!have.has(w.toLowerCase())) { words.push(w); have.add(w.toLowerCase()); }
     }
-    store.set('words', words);
     try { localStorage.removeItem('silent'); } catch {}
   }
+
+  // Write back whatever we settled on, so a browser holding a broken value is
+  // repaired for good instead of being rescued again on every load.
+  store.set('words', words);
   let listening = false;
   let wantListening = false;
   let rec = null;
@@ -267,7 +279,7 @@
   //    the list wins; the count is right either way, the label may not be.
   const MASKED = /(^|[^a-z*])([a-z])(\*{2,})(?![a-z*])/gi;
 
-  const listWords = () => words.map(w => w.trim().toLowerCase()).filter(Boolean);
+  const listWords = () => clean(words);
 
   function pattern() {
     const esc = listWords()
@@ -397,10 +409,19 @@
   $('toggle').onclick = () => { $('err').textContent = ''; wantListening ? stop() : start(); };
   $('test').onclick = ding;
   $('reset').onclick = () => { count = 0; $('count').textContent = 0; store.set('count', 0); $('log').innerHTML = ''; };
+  const typedList = () => tidy($('words').value.split('\n'));
   $('words').oninput = () => {
-    words = $('words').value.split('\n').map(w => w.trim()).filter(Boolean);
+    // Never store an empty list -- that is what produced the dead box. An
+    // empty box falls back to the defaults and keeps listening. The box
+    // itself is left alone until blur, so this cannot fight someone who is
+    // part way through clearing it out and retyping.
+    const typed = typedList();
+    words = typed.length ? typed : DEFAULT_WORDS.slice();
     store.set('words', words);
     re = pattern();
+  };
+  $('words').onblur = () => {
+    if (!typedList().length) $('words').value = DEFAULT_WORDS.join('\n');
   };
 
   // Chrome pauses audio when the tab is hidden; keep the page visible.
