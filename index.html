@@ -153,7 +153,7 @@
     <div>
       <label for="words">Goat words</label>
       <textarea id="words" spellcheck="false" placeholder="one word or phrase per line"></textarea>
-      <div class="hint">One per line. Not case-sensitive. Whole words only, so "hell" won't fire on "hello". Chrome's asterisk masking ("f***") counts too. One goat every 2 seconds at most. Saved in this browser.</div>
+      <div class="hint">One per line. Not case-sensitive. Whole words, but ordinary endings count, so "fuck" also catches "fucking". Chrome's asterisk masking ("f***") counts too. One goat every 2 seconds at most. Saved in this browser.</div>
     </div>
 
     <div>
@@ -269,6 +269,12 @@
   //
   // 1. Plain text, via one \b-anchored alternation. Whole words only, so "ass"
   //    does not fire on "class" or "pass", and multi-word entries still work.
+  //    "fuck" on its own missed "fucking", so each list word also contributes
+  //    its ordinary English endings. Note what is NOT done here: the word
+  //    boundary is never loosened. Allowing any trailing letters would put
+  //    "ass" back on "assist", "assume", "asset" and "assassin". Instead the
+  //    set of whole words is widened, and every one of them is still matched
+  //    with a boundary at both ends.
   // 2. Chrome's masked profanity. The engine returns "f***" instead of the
   //    word, and nothing anchored on \b can see that, because an asterisk is
   //    not a word character. So a token of one letter plus two or more
@@ -281,18 +287,51 @@
 
   const listWords = () => clean(words);
 
+  // Endings a goat word can pick up. The doubled set is for words that double
+  // their last consonant first: "shit" -> "shitting", "shitty".
+  const ENDINGS = ['s', 'es', 'ed', 'ing', 'in', "in'", 'er', 'ers', 'y'];
+  const DOUBLED = ['ed', 'ing', 'in', "in'", 'er', 'ers', 'y'];
+
+  // Every written form of one list word, mapped back to the word itself.
+  // A phrase is left exactly as typed -- "shut up" has no plural.
+  function formsOf(word) {
+    const out = [word];
+    if (word.includes(' ')) return out;
+    for (const e of ENDINGS) out.push(word + e);
+    const last = word[word.length - 1];
+    if (/[bcdfghjklmnpqrstvwxz]/.test(last))
+      for (const e of DOUBLED) out.push(word + last + e);
+    return out;
+  }
+
+  // form -> the list word it belongs to, so the log stays a tally of the
+  // words on the list rather than every ending anyone happens to say.
+  function buildForms() {
+    const map = new Map();
+    for (const w of listWords())
+      for (const f of formsOf(w)) if (!map.has(f)) map.set(f, w);
+    return map;
+  }
+  let forms = buildForms();
+
   function pattern() {
-    const esc = listWords()
+    const esc = [...forms.keys()]
+      .sort((a, b) => b.length - a.length)   // prefer "fucking" over "fuck"
       .map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'));
     return esc.length ? new RegExp('\\b(' + esc.join('|') + ')\\b', 'gi') : null;
   }
   let re = pattern();
 
   // "f***" -> "fuck". Single tokens only: a masked word is never a phrase.
+  // A plain list word wins over an inflected form of a different word, so
+  // n+5 still resolves to "nigger" rather than to a plural of "nigga".
   function unmask(token) {
-    const first = token[0].toLowerCase();
-    return listWords().find(w =>
-      !w.includes(' ') && w.length === token.length && w[0] === first) || null;
+    const first = token[0].toLowerCase(), len = token.length;
+    const fits = w => !w.includes(' ') && w.length === len && w[0] === first;
+    const exact = listWords().find(fits);
+    if (exact) return exact;
+    for (const [form, root] of forms) if (fits(form)) return root;
+    return null;
   }
 
   // Every hit in one pass, in reading order, so the counter and the on-screen
@@ -303,7 +342,8 @@
     if (re) {
       re.lastIndex = 0;
       while ((m = re.exec(text)) !== null) {
-        found.push({ at: m.index, len: m[0].length, word: m[1].toLowerCase() });
+        const said = m[1].toLowerCase();
+        found.push({ at: m.index, len: m[0].length, word: forms.get(said) || said });
         if (m[0].length === 0) re.lastIndex++;
       }
     }
@@ -418,6 +458,7 @@
     const typed = typedList();
     words = typed.length ? typed : DEFAULT_WORDS.slice();
     store.set('words', words);
+    forms = buildForms();
     re = pattern();
   };
   $('words').onblur = () => {
