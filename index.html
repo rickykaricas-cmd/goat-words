@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Goat Words</title>
+<style>
+  :root {
+    --paper: #f7f7f4;
+    --ink: #1c1c1a;
+    --mute: #7a7a72;
+    --line: #dcdcd4;
+    --hot: #e2412a;
+    --hot-soft: #fbe3de;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    min-height: 100vh;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 28px;
+    border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 18px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  #status {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 15px; color: var(--mute);
+  }
+  #dot {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--line);
+  }
+  #dot.on { background: var(--hot); animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(226,65,42,.45); }
+    50% { box-shadow: 0 0 0 10px rgba(226,65,42,0); }
+  }
+  @media (prefers-reduced-motion: reduce) { #dot.on { animation: none; } }
+
+  main {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 0;
+  }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+
+  .stage {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 40px 28px;
+    text-align: center;
+  }
+  #count {
+    font-size: clamp(120px, 28vw, 300px);
+    font-weight: 700;
+    line-height: 0.9;
+    letter-spacing: -0.05em;
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+    transition: color .15s;
+  }
+  #count.flash { color: var(--hot); }
+  .caption { color: var(--mute); font-size: 18px; margin-top: 18px; }
+  #transcript {
+    margin-top: 40px;
+    max-width: 640px;
+    min-height: 3em;
+    font-size: 20px;
+    line-height: 1.5;
+    color: var(--mute);
+  }
+  #transcript mark { background: var(--hot-soft); color: var(--hot); border-radius: 3px; padding: 0 3px; }
+
+  aside {
+    border-left: 1px solid var(--line);
+    padding: 24px;
+    display: flex; flex-direction: column; gap: 22px;
+    font-size: 15px;
+  }
+  @media (max-width: 760px) { aside { border-left: 0; border-top: 1px solid var(--line); } }
+  label { display: block; font-weight: 600; margin-bottom: 8px; }
+  .hint { color: var(--mute); font-size: 13px; margin-top: 6px; line-height: 1.4; }
+  textarea {
+    width: 100%; min-height: 120px; resize: vertical;
+    font: inherit; padding: 10px;
+    border: 1px solid var(--line); border-radius: 6px;
+    background: white; color: var(--ink);
+  }
+  textarea:focus, button:focus-visible { outline: 3px solid var(--hot); outline-offset: 2px; }
+  button {
+    font: inherit; font-weight: 600;
+    padding: 12px 18px;
+    border-radius: 8px;
+    border: 1px solid var(--ink);
+    background: var(--ink); color: var(--paper);
+    cursor: pointer;
+    width: 100%;
+  }
+  button.quiet { background: transparent; color: var(--ink); }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 10px; }
+  #log {
+    list-style: none; margin: 0; padding: 0;
+    max-height: 220px; overflow: auto;
+    border-top: 1px solid var(--line);
+  }
+  #log li {
+    display: flex; justify-content: space-between;
+    padding: 8px 0; border-bottom: 1px solid var(--line);
+  }
+  #log li span:last-child { color: var(--mute); font-variant-numeric: tabular-nums; }
+  #log:empty::before {
+    content: "Nothing yet.";
+    display: block; padding: 12px 0; color: var(--mute);
+  }
+  footer {
+    padding: 14px 28px;
+    border-top: 1px solid var(--line);
+    color: var(--mute); font-size: 13px;
+  }
+  #err { color: var(--hot); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Goat Words</h1>
+  <div id="status"><span id="dot"></span><span id="statusText">Not listening</span></div>
+</header>
+
+<main>
+  <section class="stage">
+    <p id="count">0</p>
+    <div class="caption">goat words today</div>
+    <div id="transcript" aria-live="polite"></div>
+  </section>
+
+  <aside>
+    <div class="row">
+      <button id="toggle">Start listening</button>
+      <button id="test" class="quiet" title="Hear the goat">Test</button>
+    </div>
+
+    <div>
+      <label for="words">Goat words</label>
+      <textarea id="words" spellcheck="false" placeholder="one word or phrase per line"></textarea>
+      <div class="hint">One per line. Not case-sensitive. Whole words only, so "hell" won't fire on "hello". Saved in this browser.</div>
+    </div>
+
+    <div>
+      <label>Log</label>
+      <ul id="log"></ul>
+      <div class="row" style="margin-top:10px">
+        <button id="reset" class="quiet">Reset count</button>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<footer>
+  <span id="err"></span>
+  <span id="note">Put a <code>goat.wav</code> next to this file for the real scream; otherwise you get a synthesized bleat. Audio is processed by your browser's speech engine. Nothing is stored except your word list and today's count.</span>
+</footer>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  // ---------- state ----------
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+  };
+  const today = new Date().toDateString();
+  let count = store.get('day', '') === today ? store.get('count', 0) : 0;
+  let words = store.get('words', ['darn', 'heck', 'crap']);
+  let listening = false;
+  let wantListening = false;
+  let rec = null;
+  let lastFinalHash = '';
+
+  $('count').textContent = count;
+  $('words').value = words.join('\n');
+
+  // ---------- the goat ----------
+  // Uses goat.wav from the same folder if it exists; falls back to a synth bleat.
+  const goat = new Audio('goat.wav');
+  let haveGoat = null;
+  goat.addEventListener('canplaythrough', () => haveGoat = true, { once: true });
+  goat.addEventListener('error', () => haveGoat = false, { once: true });
+  goat.load();
+
+  let ac = null;
+  function synthBleat() {
+    if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
+    if (ac.state === 'suspended') ac.resume();
+    const t = ac.currentTime, dur = 0.9;
+    const o = ac.createOscillator(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(520, t);
+    o.frequency.linearRampToValueAtTime(600, t + 0.15);
+    o.frequency.linearRampToValueAtTime(480, t + dur);
+    const lfo = ac.createOscillator(); lfo.frequency.value = 9;      // vibrato = the "bleat"
+    const lfoGain = ac.createGain(); lfoGain.gain.value = 35;
+    lfo.connect(lfoGain).connect(o.frequency);
+    const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1400; f.Q.value = 2;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.5, t + 0.03);
+    g.gain.setValueAtTime(0.5, t + dur - 0.15);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(f).connect(g).connect(ac.destination);
+    o.start(t); lfo.start(t); o.stop(t + dur); lfo.stop(t + dur);
+  }
+  function ding() {
+    if (haveGoat) { goat.currentTime = 0; goat.play().catch(synthBleat); }
+    else synthBleat();
+  }
+
+  // ---------- matching ----------
+  function pattern() {
+    const esc = words.map(w => w.trim()).filter(Boolean)
+      .map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'));
+    return esc.length ? new RegExp('\\b(' + esc.join('|') + ')\\b', 'gi') : null;
+  }
+  let re = pattern();
+
+  function hit(word) {
+    count++;
+    $('count').textContent = count;
+    store.set('count', count);
+    store.set('day', today);
+    $('count').classList.add('flash');
+    setTimeout(() => $('count').classList.remove('flash'), 400);
+    ding();
+    const li = document.createElement('li');
+    const time = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    li.innerHTML = `<span>${word.toLowerCase()}</span><span>${time}</span>`;
+    $('log').prepend(li);
+  }
+
+  function showTranscript(text) {
+    const safe = text.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+    $('transcript').innerHTML = re ? safe.replace(re, '<mark>$1</mark>') : safe;
+  }
+
+  // ---------- speech ----------
+  function start() {
+    if (!SR) { $('err').textContent = 'This browser has no speech recognition. Use Chrome.'; return; }
+    wantListening = true;
+    rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = 'en-US';
+
+    rec.onstart = () => setListening(true);
+    rec.onend = () => { setListening(false); if (wantListening) setTimeout(start, 250); };
+    rec.onerror = e => {
+      if (e.error === 'not-allowed') { wantListening = false; $('err').textContent = 'Microphone blocked. Allow it in the address bar and try again.'; }
+      else if (e.error !== 'no-speech' && e.error !== 'aborted') $('err').textContent = 'Speech error: ' + e.error;
+    };
+    rec.onresult = e => {
+      // Only score *final* results so a word isn't counted twice while the
+      // engine is still guessing. Interim text is just shown on screen.
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        const text = r[0].transcript;
+        if (r.isFinal) {
+          const key = i + ':' + text;
+          if (key === lastFinalHash) continue;
+          lastFinalHash = key;
+          if (re) { const m = text.match(re); if (m) m.forEach(hit); }
+          showTranscript(text);
+        } else interim += text;
+      }
+      if (interim) showTranscript(interim);
+    };
+    try { rec.start(); } catch {}
+  }
+
+  function stop() {
+    wantListening = false;
+    if (rec) rec.stop();
+    setListening(false);
+  }
+
+  function setListening(on) {
+    listening = on;
+    $('dot').classList.toggle('on', on);
+    $('statusText').textContent = on ? 'Listening' : (wantListening ? 'Reconnecting…' : 'Not listening');
+    $('toggle').textContent = wantListening ? 'Stop listening' : 'Start listening';
+  }
+
+  // ---------- UI ----------
+  $('toggle').onclick = () => { $('err').textContent = ''; wantListening ? stop() : start(); };
+  $('test').onclick = ding;
+  $('reset').onclick = () => { count = 0; $('count').textContent = 0; store.set('count', 0); $('log').innerHTML = ''; };
+  $('words').oninput = () => {
+    words = $('words').value.split('\n').map(w => w.trim()).filter(Boolean);
+    store.set('words', words);
+    re = pattern();
+  };
+
+  // Chrome pauses audio when the tab is hidden; keep the page visible.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && wantListening && !listening) start();
+  });
+})();
+</script>
+</body>
+</html>
