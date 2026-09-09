@@ -153,7 +153,7 @@
     <div>
       <label for="words">Goat words</label>
       <textarea id="words" spellcheck="false" placeholder="one word or phrase per line"></textarea>
-      <div class="hint">One per line. Not case-sensitive. Whole words only, so "hell" won't fire on "hello". Saved in this browser.</div>
+      <div class="hint">One per line. Not case-sensitive. Whole words only, so "hell" won't fire on "hello". Chrome's asterisk masking ("f***") counts too. One goat every 2 seconds at most. Saved in this browser.</div>
     </div>
 
     <div>
@@ -183,7 +183,18 @@
   };
   const today = new Date().toDateString();
   let count = store.get('day', '') === today ? store.get('count', 0) : 0;
-  let words = store.get('words', ['darn', 'heck', 'crap']);
+
+  const DEFAULT_WORDS = ['fuck', 'ass', 'bitch', 'shit', 'nigga', 'nigger'];
+  const OLD_DEFAULT_WORDS = ['darn', 'heck', 'crap'];
+  const asKey = list => list.map(w => w.trim().toLowerCase()).filter(Boolean).sort().join('\n');
+
+  let words = store.get('words', DEFAULT_WORDS.slice());
+  // A browser still carrying the untouched original starter list gets the new
+  // one. A list that was actually edited is left exactly as it is.
+  if (asKey(words) === asKey(OLD_DEFAULT_WORDS)) {
+    words = DEFAULT_WORDS.slice();
+    store.set('words', words);
+  }
   let listening = false;
   let wantListening = false;
   let rec = null;
@@ -227,14 +238,75 @@
   }
 
   // ---------- matching ----------
+  // Two different things have to be caught here.
+  //
+  // 1. Plain text, via one \b-anchored alternation. Whole words only, so "ass"
+  //    does not fire on "class" or "pass", and multi-word entries still work.
+  // 2. Chrome's masked profanity. The engine returns "f***" instead of the
+  //    word, and nothing anchored on \b can see that, because an asterisk is
+  //    not a word character. So a token of one letter plus two or more
+  //    asterisks is resolved against the list by first letter and total
+  //    length: f+3 is "fuck", a+2 is "ass", n+4 is "nigga", n+5 is "nigger".
+  //    It is logged as the list word it resolved to, never as the asterisks.
+  //    If two list words share a first letter and a length, the earlier one in
+  //    the list wins; the count is right either way, the label may not be.
+  const MASKED = /(^|[^a-z*])([a-z])(\*{2,})(?![a-z*])/gi;
+
+  const listWords = () => words.map(w => w.trim().toLowerCase()).filter(Boolean);
+
   function pattern() {
-    const esc = words.map(w => w.trim()).filter(Boolean)
+    const esc = listWords()
       .map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'));
     return esc.length ? new RegExp('\\b(' + esc.join('|') + ')\\b', 'gi') : null;
   }
   let re = pattern();
 
+  // "f***" -> "fuck". Single tokens only: a masked word is never a phrase.
+  function unmask(token) {
+    const first = token[0].toLowerCase();
+    return listWords().find(w =>
+      !w.includes(' ') && w.length === token.length && w[0] === first) || null;
+  }
+
+  // Every hit in one pass, in reading order, so the counter and the on-screen
+  // highlight are driven by exactly the same result.
+  function scan(text) {
+    const found = [];
+    let m;
+    if (re) {
+      re.lastIndex = 0;
+      while ((m = re.exec(text)) !== null) {
+        found.push({ at: m.index, len: m[0].length, word: m[1].toLowerCase() });
+        if (m[0].length === 0) re.lastIndex++;
+      }
+    }
+    MASKED.lastIndex = 0;
+    while ((m = MASKED.exec(text)) !== null) {
+      const token = m[2] + m[3];
+      const word = unmask(token);
+      if (word) found.push({ at: m.index + m[1].length, len: token.length, word });
+    }
+    found.sort((a, b) => a.at - b.at);
+    const out = [];
+    let end = 0;
+    for (const f of found) {
+      if (f.at < end) continue;   // never score the same span twice
+      out.push(f);
+      end = f.at + f.len;
+    }
+    return out;
+  }
+
+  // ---------- scoring ----------
+  // One outburst should cost one goat: not one per word in it, and not one
+  // more every time the engine re-reads the same phrase.
+  const COOLDOWN_MS = 2000;
+  let lastHitAt = 0;
+
   function hit(word) {
+    const now = Date.now();
+    if (now - lastHitAt < COOLDOWN_MS) return;
+    lastHitAt = now;
     count++;
     $('count').textContent = count;
     store.set('count', count);
@@ -249,8 +321,13 @@
   }
 
   function showTranscript(text) {
-    const safe = text.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-    $('transcript').innerHTML = re ? safe.replace(re, '<mark>$1</mark>') : safe;
+    const esc = s => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+    let html = '', at = 0;
+    for (const m of scan(text)) {
+      html += esc(text.slice(at, m.at)) + '<mark>' + esc(text.slice(m.at, m.at + m.len)) + '</mark>';
+      at = m.at + m.len;
+    }
+    $('transcript').innerHTML = html + esc(text.slice(at));
   }
 
   // ---------- speech ----------
@@ -279,7 +356,7 @@
           const key = i + ':' + text;
           if (key === lastFinalHash) continue;
           lastFinalHash = key;
-          if (re) { const m = text.match(re); if (m) m.forEach(hit); }
+          scan(text).forEach(m => hit(m.word));
           showTranscript(text);
         } else interim += text;
       }
